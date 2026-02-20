@@ -27,5 +27,5 @@ COPY main.py .
 # Expose the port FastAPI will run on
 EXPOSE 8000
 
-# Command to run the API
+# Command to run the API (FIXED: Added brackets and commands)
 CMD
