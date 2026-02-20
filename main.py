@@ -14,6 +14,7 @@ security = HTTPBearer()
 SECRET_TOKEN = "my_super_secret_hostinger_token_123!"
 
 # Initialize AI Models (Loaded on startup)
+# FIXED: Added
 reader = easyocr.Reader(, gpu=False)
 sr = cv2.dnn_superres.DnnSuperResImpl_create()
 sr.readModel("EDSR_x2.pb")
@@ -29,6 +30,7 @@ def verify_token(credentials: HTTPAuthorizationCredentials = Depends(security)):
 async def ping():
     return {"status": "success", "message": "API is Live!"}
 
+# FIXED: Added
 @app.post("/upscale", dependencies=)
 async def upscale_image(image: UploadFile = File(...)):
     contents = await image.read()
@@ -39,6 +41,7 @@ async def upscale_image(image: UploadFile = File(...)):
     _, encoded_img = cv2.imencode('.png', upscaled_img)
     return Response(content=encoded_img.tobytes(), media_type="image/png")
 
+# FIXED: Added
 @app.post("/remove-watermark", dependencies=)
 async def remove_watermark(image: UploadFile = File(...)):
     contents = await image.read()
@@ -61,6 +64,7 @@ async def remove_watermark(image: UploadFile = File(...)):
     _, encoded_img = cv2.imencode('.png', inpainted_img)
     return Response(content=encoded_img.tobytes(), media_type="image/png")
 
+# FIXED: Added
 @app.post("/remove-background", dependencies=)
 async def remove_background_api(image: UploadFile = File(...)):
     contents = await image.read()
