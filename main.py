@@ -10,12 +10,12 @@ from fastapi.responses import Response
 app = FastAPI(title="Pro Image Tools API")
 security = HTTPBearer()
 
-# 🛑 CONFIGURATION: Change this to a secure password!
+# 🛑 CONFIGURATION: Change this to your actual secure password!
 SECRET_TOKEN = "my_super_secret_hostinger_token_123!"
 
 # Initialize AI Models (Loaded on startup)
-# FIXED: Added
-reader = easyocr.Reader(, gpu=False)
+# Using a tuple ('en',) to prevent formatting errors!
+reader = easyocr.Reader(('en',), gpu=False)
 sr = cv2.dnn_superres.DnnSuperResImpl_create()
 sr.readModel("EDSR_x2.pb")
 sr.setModel("edsr", 2)
@@ -30,9 +30,9 @@ def verify_token(credentials: HTTPAuthorizationCredentials = Depends(security)):
 async def ping():
     return {"status": "success", "message": "API is Live!"}
 
-# FIXED: Added
-@app.post("/upscale", dependencies=)
-async def upscale_image(image: UploadFile = File(...)):
+# Token verification is now safely inside the function arguments!
+@app.post("/upscale")
+async def upscale_image(image: UploadFile = File(...), token: str = Depends(verify_token)):
     contents = await image.read()
     np_arr = np.frombuffer(contents, np.uint8)
     img = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
@@ -41,9 +41,8 @@ async def upscale_image(image: UploadFile = File(...)):
     _, encoded_img = cv2.imencode('.png', upscaled_img)
     return Response(content=encoded_img.tobytes(), media_type="image/png")
 
-# FIXED: Added
-@app.post("/remove-watermark", dependencies=)
-async def remove_watermark(image: UploadFile = File(...)):
+@app.post("/remove-watermark")
+async def remove_watermark(image: UploadFile = File(...), token: str = Depends(verify_token)):
     contents = await image.read()
     np_arr = np.frombuffer(contents, np.uint8)
     img = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
@@ -64,9 +63,8 @@ async def remove_watermark(image: UploadFile = File(...)):
     _, encoded_img = cv2.imencode('.png', inpainted_img)
     return Response(content=encoded_img.tobytes(), media_type="image/png")
 
-# FIXED: Added
-@app.post("/remove-background", dependencies=)
-async def remove_background_api(image: UploadFile = File(...)):
+@app.post("/remove-background")
+async def remove_background_api(image: UploadFile = File(...), token: str = Depends(verify_token)):
     contents = await image.read()
     output_image_bytes = remove(contents) 
     return Response(content=output_image_bytes, media_type="image/png")
