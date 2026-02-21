@@ -16,7 +16,9 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 # Download the EDSR 2x Upscaling Model directly into the image
-RUN wget https://github.com/Saafke/EDSR_Tensorflow/raw/master/models/EDSR_x2.pb
+# Download the EDSR 2x and 4x Upscaling Models
+RUN wget https://github.com/Saafke/EDSR_Tensorflow/raw/master/models/EDSR_x2.pb \
+    && wget https://github.com/Saafke/EDSR_Tensorflow/raw/master/models/EDSR_x4.pb
 
 # Copy requirements and install them
 COPY requirements.txt .
@@ -30,3 +32,4 @@ EXPOSE 8000
 
 # Command to run the API (Using shell format)
 CMD uvicorn main:app --host 0.0.0.0 --port 8000
+
