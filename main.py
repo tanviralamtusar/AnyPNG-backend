@@ -67,35 +67,47 @@ async def remove_watermark(image: UploadFile = File(...), token: str = Depends(v
     print("💧 WATERMARK: Auto-detecting faint watermark lines...")
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
     
-    # Black-hat transform: Extracts dark/light thin lines on varying backgrounds
     rectKernel = cv2.getStructuringElement(cv2.MORPH_RECT, (15, 3))
     blackhat = cv2.morphologyEx(gray, cv2.MORPH_BLACKHAT, rectKernel)
     
-    # Isolate the faint lines
     _, mask = cv2.threshold(blackhat, 10, 255, cv2.THRESH_BINARY)
     
-    # Expand the mask slightly so the AI covers the edges perfectly
     kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
     mask = cv2.dilate(mask, kernel, iterations=1)
 
-    # 2. WAKE UP LAMA GENERATIVE AI (The Magic Part)
-    print("💧 WATERMARK: Waking up LaMa Generative AI...")
+    # 2. WAKE UP LAMA GENERATIVE AI (With CPU Patch!)
+    print("💧 WATERMARK: Waking up LaMa Generative AI on CPU...")
+    import torch
     from simple_lama_inpainting import SimpleLama
     from PIL import Image
+    import io
+    import gc
     
-    lama = SimpleLama()
+    # 🟢 THE MAGIC FIX: "Monkey-Patch" PyTorch to forcefully load the GPU model onto your CPU!
+    original_load = torch.jit.load
+    def cpu_load(f, map_location=None, _extra_files=None):
+        return original_load(f, map_location='cpu', _extra_files=_extra_files)
+    torch.jit.load = cpu_load
     
-    # Convert formats for LaMa
-    pil_img = Image.fromarray(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
-    pil_mask = Image.fromarray(mask).convert('L')
+    try:
+        # Now when SimpleLama starts, our patch forces it to use the CPU!
+        lama = SimpleLama()
+        
+        pil_img = Image.fromarray(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
+        pil_mask = Image.fromarray(mask).convert('L')
+        
+        print("💧 WATERMARK: AI is recreating the missing background...")
+        result_img = lama(pil_img, pil_mask)
     
-    print("💧 WATERMARK: AI is recreating the missing background...")
-    result_img = lama(pil_img, pil_mask)
-    
-    # 🟢 KILL THE AI AND FREE THE RAM
-    print("🧹 WATERMARK: Destroying AI from RAM to free memory...")
-    del lama
-    gc.collect()
+    finally:
+        # Restore normal PyTorch behavior just to be clean
+        torch.jit.load = original_load
+        
+        # 🟢 KILL THE AI AND FREE THE RAM
+        print("🧹 WATERMARK: Destroying AI from RAM to free memory...")
+        if 'lama' in locals():
+            del lama
+        gc.collect()
 
     # Convert the finished PIL image back to bytes for download
     img_byte_arr = io.BytesIO()
@@ -123,3 +135,4 @@ async def remove_background_api(image: UploadFile = File(...), token: str = Depe
     
     print("✅ BACKGROUND: Success! Sending transparent PNG back.")
     return Response(content=output_image_bytes, media_type="image/png")
+
