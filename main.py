@@ -1,14 +1,13 @@
 import io
 import cv2
 import numpy as np
-import easyocr
-import gc  # 🟢 NEW: Python's Garbage Collector
-from rembg import remove, new_session  # 🟢 NEW: Imported new_session to manage RAM
+import gc  # 🟢 Python's Garbage Collector
+from rembg import remove, new_session  
 from fastapi import FastAPI, File, UploadFile, Depends, HTTPException, Form
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.responses import Response
 
-app = FastAPI(title="Pro Image Tools API")
+app = FastAPI(title="AnyPNG API")
 security = HTTPBearer()
 
 # 🛑 CONFIGURATION: Change this to your actual password!
@@ -64,40 +63,46 @@ async def remove_watermark(image: UploadFile = File(...), token: str = Depends(v
     np_arr = np.frombuffer(contents, np.uint8)
     img = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
 
-    # WAKE UP EASYOCR AI
-    print("💧 WATERMARK: Waking up EasyOCR AI into RAM...")
-    reader = easyocr.Reader(('en',), gpu=False)
+    # 1. NEW AUTO-MASKER (Finds thin watermark lines, ignores thick logos)
+    print("💧 WATERMARK: Auto-detecting faint watermark lines...")
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
     
-    print("💧 WATERMARK: Scanning image for text...")
-    results = reader.readtext(img)
+    # Black-hat transform: Extracts dark/light thin lines on varying backgrounds
+    rectKernel = cv2.getStructuringElement(cv2.MORPH_RECT, (15, 3))
+    blackhat = cv2.morphologyEx(gray, cv2.MORPH_BLACKHAT, rectKernel)
     
-    h, w, c = img.shape
-    mask = np.zeros((h, w), dtype=np.uint8)
-
-    print(f"💧 WATERMARK: Found {len(results)} text blocks. Generating mask...")
-    for (bbox, text, prob) in results:
-        tl, tr, br, bl = bbox
-        x_tl, y_tl = tl
-        x_br, y_br = br
-        
-        pt1 = (int(x_tl), int(y_tl))
-        pt2 = (int(x_br), int(y_br))
-        cv2.rectangle(mask, pt1, pt2, 255, thickness=-1)
-
-    print("💧 WATERMARK: Running AI Inpainting to erase pixels...")
-    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5))
+    # Isolate the faint lines
+    _, mask = cv2.threshold(blackhat, 10, 255, cv2.THRESH_BINARY)
+    
+    # Expand the mask slightly so the AI covers the edges perfectly
+    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
     mask = cv2.dilate(mask, kernel, iterations=1)
-    inpainted_img = cv2.inpaint(img, mask, inpaintRadius=7, flags=cv2.INPAINT_TELEA)
 
-    _, encoded_img = cv2.imencode('.png', inpainted_img)
+    # 2. WAKE UP LAMA GENERATIVE AI (The Magic Part)
+    print("💧 WATERMARK: Waking up LaMa Generative AI...")
+    from simple_lama_inpainting import SimpleLama
+    from PIL import Image
+    
+    lama = SimpleLama()
+    
+    # Convert formats for LaMa
+    pil_img = Image.fromarray(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
+    pil_mask = Image.fromarray(mask).convert('L')
+    
+    print("💧 WATERMARK: AI is recreating the missing background...")
+    result_img = lama(pil_img, pil_mask)
     
     # 🟢 KILL THE AI AND FREE THE RAM
     print("🧹 WATERMARK: Destroying AI from RAM to free memory...")
-    del reader
+    del lama
     gc.collect()
+
+    # Convert the finished PIL image back to bytes for download
+    img_byte_arr = io.BytesIO()
+    result_img.save(img_byte_arr, format='PNG')
     
-    print("✅ WATERMARK: Success! Sending healed PNG back.")
-    return Response(content=encoded_img.tobytes(), media_type="image/png")
+    print("✅ WATERMARK: Success! Sending perfectly healed PNG back.")
+    return Response(content=img_byte_arr.getvalue(), media_type="image/png")
 
 @app.post("/remove-background")
 async def remove_background_api(image: UploadFile = File(...), token: str = Depends(verify_token)):
