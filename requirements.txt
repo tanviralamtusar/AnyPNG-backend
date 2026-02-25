@@ -4,5 +4,6 @@ python-multipart
 opencv-contrib-python-headless
 rembg
 onnxruntime
-simple-lama-inpainting
+google-genai
 Pillow
+supabase
