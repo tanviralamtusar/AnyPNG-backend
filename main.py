@@ -125,8 +125,10 @@ async def remove_watermark(
     pil_img = Image.open(io.BytesIO(contents))
     
     try:
-        # 🟢 FIXED: Use generate_content and pass both the image and prompt in the contents list!
-        result = google_client.models.generate_content(
+        print("💧 WATERMARK: Waiting for Gemini 3.1 Pro to think and draw...")
+        
+        # 🟢 FIXED: Added 'await' and '.aio.' to prevent the server from freezing!
+        result = await google_client.aio.models.generate_content(
             model='gemini-3.1-pro-preview', 
             contents=[pil_img, prompt]
         )
@@ -139,7 +141,6 @@ async def remove_watermark(
                     output_bytes = part.inline_data.data
                     break
         
-        # If Gemini gets confused and sends text back instead of an image, catch it!
         if not output_bytes:
             raise Exception("Google returned a text response instead of an image.")
             
@@ -151,3 +152,4 @@ async def remove_watermark(
         # 🟢 Refund the credit so the user isn't cheated out of their money!
         supabase.table("profiles").update({"credits": current_credits}).eq("id", user_id).execute()
         raise HTTPException(status_code=500, detail="AI generation failed. Credit safely refunded.")
+
