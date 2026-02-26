@@ -11,6 +11,7 @@ from fastapi.responses import Response
 # Google GenAI & PIL
 from google import genai
 from PIL import Image
+from google.genai import types
 
 # Supabase & Dotenv
 from supabase import create_client, Client
@@ -103,8 +104,8 @@ async def remove_background_api(image: UploadFile = File(...), token: str = Depe
 @app.post("/remove-watermark")
 async def remove_watermark(
     image: UploadFile = File(...), 
-    prompt: str = Form(...), # Receives custom user prompt from the Chrome Extension UI
-    user_id: str = Depends(verify_supabase_user) # 🟢 Requires Supabase Login
+    prompt: str = Form(...),
+    user_id: str = Depends(verify_supabase_user) 
 ):
     print(f"💎 PRO AI: Watermark request from User {user_id}. Prompt: {prompt}")
     
@@ -124,19 +125,29 @@ async def remove_watermark(
     pil_img = Image.open(io.BytesIO(contents))
     
     try:
-        result = google_client.models.generate_images(
+        # 🟢 FIXED: Use generate_content and pass both the image and prompt in the contents list!
+        result = google_client.models.generate_content(
             model='gemini-3.1-pro-preview', 
-            prompt=prompt,
-            image=pil_img,
-            output_format="png"
+            contents=[pil_img, prompt]
         )
-        output_bytes = result.generated_images[0].image.image_bytes
         
+        # 3. Safely extract the generated image bytes from Gemini's response
+        output_bytes = None
+        if result.candidates and result.candidates[0].content.parts:
+            for part in result.candidates[0].content.parts:
+                if part.inline_data and part.inline_data.data:
+                    output_bytes = part.inline_data.data
+                    break
+        
+        # If Gemini gets confused and sends text back instead of an image, catch it!
+        if not output_bytes:
+            raise Exception("Google returned a text response instead of an image.")
+            
         print("✅ PRO AI: Success! Google flawlessly removed the watermark.")
         return Response(content=output_bytes, media_type="image/png")
         
     except Exception as e:
         print(f"❌ PRO AI ERROR: {str(e)}")
-        # Refund credit if Google fails
+        # 🟢 Refund the credit so the user isn't cheated out of their money!
         supabase.table("profiles").update({"credits": current_credits}).eq("id", user_id).execute()
-        raise HTTPException(status_code=500, detail="AI generation failed. Credit refunded.")
+        raise HTTPException(status_code=500, detail="AI generation failed. Credit safely refunded.")
