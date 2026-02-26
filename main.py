@@ -2,7 +2,7 @@ import io
 import os
 import cv2
 import numpy as np
-import gc  # 🟢 Python's Garbage Collector
+import gc
 from rembg import remove, new_session  
 from fastapi import FastAPI, File, UploadFile, Depends, HTTPException, Form, Header
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
@@ -17,17 +17,20 @@ from google.genai import types
 from supabase import create_client, Client
 from dotenv import load_dotenv
 
-# 🟢 NEW: Load secret variables securely
 load_dotenv()
 
 app = FastAPI(title="AnyPNG SaaS API")
 security = HTTPBearer()
 
-# 🛑 CONFIGURATION (Securely pulled from Coolify Environment Variables!)
-SECRET_TOKEN = os.getenv("SECRET_TOKEN", "my_super_secret_hostinger_token_123!") # Fallback for old tools
+# 🛑 CONFIGURATION
+SECRET_TOKEN = os.getenv("SECRET_TOKEN", "my_super_secret_hostinger_token_123!") 
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
+
+# 🟢 THE FIX: Set this to the exact Image Model from your screenshot!
+# (Check AI Studio -> Click the model -> Click "<> Get Code" to verify this string)
+GEMINI_IMAGE_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.1-flash-image-preview")
 
 # Initialize Clients
 if GOOGLE_API_KEY:
@@ -35,23 +38,20 @@ if GOOGLE_API_KEY:
 if SUPABASE_URL and SUPABASE_KEY:
     supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-print("🟢 SaaS Server started! Watermarks routed to Gemini Pro. Upscaler/BG running locally.")
+print(f"🟢 SaaS Server started! Watermarks routed to {GEMINI_IMAGE_MODEL}.")
 
-# --- AUTH 1: For Free Local Tools (Upscale & BG Remove) ---
+# --- AUTH 1: For Free Local Tools ---
 def verify_token(credentials: HTTPAuthorizationCredentials = Depends(security)):
     if credentials.credentials != SECRET_TOKEN:
-        print("❌ Unauthorized Access Attempted (Basic Token)!")
         raise HTTPException(status_code=401, detail="Invalid Security Token")
     return credentials.credentials
 
-# --- AUTH 2: For SaaS Pro Tools (Watermark via Supabase Login) ---
+# --- AUTH 2: For SaaS Pro Tools ---
 async def verify_supabase_user(authorization: str = Header(...)):
     if not authorization or not authorization.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="Missing login token")
-    
     token = authorization.split(" ")[1]
     try:
-        # Ask Supabase who this token belongs to
         user_res = supabase.auth.get_user(token)
         if not user_res.user: raise Exception()
         return user_res.user.id
@@ -62,7 +62,6 @@ async def verify_supabase_user(authorization: str = Header(...)):
 
 @app.get("/ping")
 async def ping():
-    print("🏓 Ping endpoint hit!")
     return {"status": "success", "message": "API is Live!"}
 
 @app.post("/upscale")
@@ -125,31 +124,36 @@ async def remove_watermark(
     pil_img = Image.open(io.BytesIO(contents))
     
     try:
-        print("💧 WATERMARK: Waiting for Gemini 3.1 Pro to think and draw...")
+        print(f"💧 WATERMARK: Waiting for {GEMINI_IMAGE_MODEL} to process...")
         
-        # 🟢 FIXED: Added 'await' and '.aio.' to prevent the server from freezing!
+        # 🟢 AWAIT + AIO stops the server from freezing!
         result = await google_client.aio.models.generate_content(
-            model='gemini-3.1-pro-preview', 
+            model=GEMINI_IMAGE_MODEL, 
             contents=[pil_img, prompt]
         )
         
-        # 3. Safely extract the generated image bytes from Gemini's response
+        # 3. Safely extract the image
         output_bytes = None
+        text_reply = ""
+        
         if result.candidates and result.candidates[0].content.parts:
             for part in result.candidates[0].content.parts:
                 if part.inline_data and part.inline_data.data:
                     output_bytes = part.inline_data.data
                     break
+                elif part.text:
+                    text_reply += part.text
         
+        # If it returns text instead of an image, we log the exact text to see what went wrong
         if not output_bytes:
-            raise Exception("Google returned a text response instead of an image.")
+            print(f"❌ GOOGLE REPLIED WITH TEXT INSTEAD OF IMAGE: {text_reply}")
+            raise Exception(f"Google sent a text response instead of an image. Verify the model name.")
             
         print("✅ PRO AI: Success! Google flawlessly removed the watermark.")
         return Response(content=output_bytes, media_type="image/png")
         
     except Exception as e:
         print(f"❌ PRO AI ERROR: {str(e)}")
-        # 🟢 Refund the credit so the user isn't cheated out of their money!
+        # 🟢 Refund the credit
         supabase.table("profiles").update({"credits": current_credits}).eq("id", user_id).execute()
         raise HTTPException(status_code=500, detail="AI generation failed. Credit safely refunded.")
-
