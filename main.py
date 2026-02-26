@@ -1,38 +1,67 @@
 import io
+import os
 import cv2
 import numpy as np
 import gc  # 🟢 Python's Garbage Collector
 from rembg import remove, new_session  
-from fastapi import FastAPI, File, UploadFile, Depends, HTTPException, Form
+from fastapi import FastAPI, File, UploadFile, Depends, HTTPException, Form, Header
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.responses import Response
 
-# 🟢 NEW: Import Google GenAI and PIL
+# Google GenAI & PIL
 from google import genai
 from PIL import Image
 
-app = FastAPI(title="AnyPNG API")
+# Supabase & Dotenv
+from supabase import create_client, Client
+from dotenv import load_dotenv
+
+# 🟢 NEW: Load secret variables securely
+load_dotenv()
+
+app = FastAPI(title="AnyPNG SaaS API")
 security = HTTPBearer()
 
-# 🛑 CONFIGURATION
-SECRET_TOKEN = "my_super_secret_hostinger_token_123!"
-GOOGLE_API_KEY = "YOUR_GEMINI_API_KEY_HERE"  # 👈 PASTE YOUR GOOGLE API KEY HERE
+# 🛑 CONFIGURATION (Securely pulled from Coolify Environment Variables!)
+SECRET_TOKEN = os.getenv("SECRET_TOKEN", "my_super_secret_hostinger_token_123!") # Fallback for old tools
+GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
+SUPABASE_URL = os.getenv("SUPABASE_URL")
+SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
 
-# Initialize Google Client
-if GOOGLE_API_KEY != "YOUR_GEMINI_API_KEY_HERE":
+# Initialize Clients
+if GOOGLE_API_KEY:
     google_client = genai.Client(api_key=GOOGLE_API_KEY)
+if SUPABASE_URL and SUPABASE_KEY:
+    supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-print("🟢 Server started in LOW-RAM Mode! Watermarks routed to Gemini Pro.")
+print("🟢 SaaS Server started! Watermarks routed to Gemini Pro. Upscaler/BG running locally.")
 
+# --- AUTH 1: For Free Local Tools (Upscale & BG Remove) ---
 def verify_token(credentials: HTTPAuthorizationCredentials = Depends(security)):
     if credentials.credentials != SECRET_TOKEN:
-        print("❌ Unauthorized Access Attempted!")
+        print("❌ Unauthorized Access Attempted (Basic Token)!")
         raise HTTPException(status_code=401, detail="Invalid Security Token")
     return credentials.credentials
 
+# --- AUTH 2: For SaaS Pro Tools (Watermark via Supabase Login) ---
+async def verify_supabase_user(authorization: str = Header(...)):
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Missing login token")
+    
+    token = authorization.split(" ")[1]
+    try:
+        # Ask Supabase who this token belongs to
+        user_res = supabase.auth.get_user(token)
+        if not user_res.user: raise Exception()
+        return user_res.user.id
+    except:
+        raise HTTPException(status_code=401, detail="Invalid session. Please login via the extension.")
+
+# --- ENDPOINTS ---
+
 @app.get("/ping")
 async def ping():
-    print("🏓 Ping endpoint hit by Chrome Extension!")
+    print("🏓 Ping endpoint hit!")
     return {"status": "success", "message": "API is Live!"}
 
 @app.post("/upscale")
@@ -42,9 +71,7 @@ async def upscale_image(image: UploadFile = File(...), scale: int = Form(2), tok
     np_arr = np.frombuffer(contents, np.uint8)
     img = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
     
-    print("🚀 UPSCALING: Waking up OpenCV AI from hard drive into RAM...")
     sr = cv2.dnn_superres.DnnSuperResImpl_create()
-    
     if scale == 4:
         sr.readModel("EDSR_x4.pb")
         sr.setModel("edsr", 4)
@@ -52,62 +79,64 @@ async def upscale_image(image: UploadFile = File(...), scale: int = Form(2), tok
         sr.readModel("EDSR_x2.pb")
         sr.setModel("edsr", 2)
         
-    print(f"🚀 UPSCALING: Processing through {scale}x EDSR model... Please wait.")
     upscaled_img = sr.upsample(img)
     _, encoded_img = cv2.imencode('.png', upscaled_img)
     
-    print("🧹 UPSCALING: Destroying AI from RAM to free memory...")
     del sr
     gc.collect()
-    
-    print("✅ UPSCALING: Success! Sending PNG back to Chrome.")
+    print("✅ UPSCALING: Success!")
     return Response(content=encoded_img.tobytes(), media_type="image/png")
-
-@app.post("/remove-watermark")
-async def remove_watermark(
-    image: UploadFile = File(...), 
-    prompt: str = Form("Remove all watermarks, text, and translucent lines like 'pngtree' or 'VectorStock'. Keep the logos, subject, and background completely untouched and perfectly preserved."),
-    token: str = Depends(verify_token)
-):
-    print("💧 WATERMARK: Request received. Sending to Google Gemini Pro...")
-    
-    # 1. Read the uploaded image
-    contents = await image.read()
-    pil_img = Image.open(io.BytesIO(contents))
-    
-    try:
-        # 2. Ask Gemini to edit the image using Natural Language
-        result = google_client.models.generate_images(
-            model='gemini-3.1-pro-preview', # Use the model name from your AI Studio
-            prompt=prompt,
-            image=pil_img,
-            output_format="png"
-        )
-        
-        # 3. Get the edited image bytes back from Google
-        output_bytes = result.generated_images[0].image.image_bytes
-        
-        print("✅ WATERMARK: Success! Google flawlessly removed the watermark.")
-        return Response(content=output_bytes, media_type="image/png")
-        
-    except Exception as e:
-        print(f"❌ WATERMARK ERROR: Google API Failed - {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Google API Error: {str(e)}")
 
 @app.post("/remove-background")
 async def remove_background_api(image: UploadFile = File(...), token: str = Depends(verify_token)):
     print("✂️ BACKGROUND: Request received.")
     contents = await image.read()
     
-    print("✂️ BACKGROUND: Waking up U2-Net AI into RAM...")
     session = new_session("u2net")
-    
-    print("✂️ BACKGROUND: Running U2-Net AI Model...")
     output_image_bytes = remove(contents, session=session) 
     
-    print("🧹 BACKGROUND: Destroying AI from RAM to free memory...")
     del session
     gc.collect()
-    
-    print("✅ BACKGROUND: Success! Sending transparent PNG back.")
+    print("✅ BACKGROUND: Success!")
     return Response(content=output_image_bytes, media_type="image/png")
+
+@app.post("/remove-watermark")
+async def remove_watermark(
+    image: UploadFile = File(...), 
+    prompt: str = Form(...), # Receives custom user prompt from the Chrome Extension UI
+    user_id: str = Depends(verify_supabase_user) # 🟢 Requires Supabase Login
+):
+    print(f"💎 PRO AI: Watermark request from User {user_id}. Prompt: {prompt}")
+    
+    # 1. CHECK & DEDUCT CREDITS IN SUPABASE
+    profile = supabase.table("profiles").select("credits").eq("id", user_id).execute()
+    if not profile.data or profile.data[0]['credits'] <= 0:
+        raise HTTPException(status_code=402, detail="Out of credits! Please buy more.")
+    
+    current_credits = profile.data[0]['credits']
+    
+    # Deduct 1 credit
+    supabase.table("profiles").update({"credits": current_credits - 1}).eq("id", user_id).execute()
+    print(f"💎 PRO AI: 1 Credit deducted. {current_credits - 1} remaining.")
+
+    # 2. RUN GOOGLE GEMINI
+    contents = await image.read()
+    pil_img = Image.open(io.BytesIO(contents))
+    
+    try:
+        result = google_client.models.generate_images(
+            model='gemini-3.1-pro-preview', 
+            prompt=prompt,
+            image=pil_img,
+            output_format="png"
+        )
+        output_bytes = result.generated_images[0].image.image_bytes
+        
+        print("✅ PRO AI: Success! Google flawlessly removed the watermark.")
+        return Response(content=output_bytes, media_type="image/png")
+        
+    except Exception as e:
+        print(f"❌ PRO AI ERROR: {str(e)}")
+        # Refund credit if Google fails
+        supabase.table("profiles").update({"credits": current_credits}).eq("id", user_id).execute()
+        raise HTTPException(status_code=500, detail="AI generation failed. Credit refunded.")
